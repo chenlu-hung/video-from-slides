@@ -1,0 +1,5 @@
+{
+  "name": "lecture-notes",
+  "version": "0.2.0",
+  "description": "Generate lecture scripts from slides (PDF/TeX) in SRT format, and synthesize speech audio using local TTS models"
+}
