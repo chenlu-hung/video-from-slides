@@ -44,12 +44,13 @@ For each SRT file in your batch:
 
 2. Run the TTSInfer CLI:
    ```bash
-   <cli-path> --srt <srt-path> --output <output-wav-path> [--voice-ref <ref-path>] --backend coreml
+   <cli-path> --srt <srt-path> --output <output-wav-path> [--embedding <emb-path>] [--voice-ref <ref-path>] --backend coreml
    ```
    - Replace `<cli-path>` with the provided CLI binary path
    - Replace `<srt-path>` with the full path to the SRT file
    - Replace `<output-wav-path>` with `<audio-dir>/slide_XX.mp3` (matching the SRT filename's number)
-   - Only include `--voice-ref` if a voice reference path was provided (not "none")
+   - If a speaker embedding path was provided (not "none"), include `--embedding <emb-path>` — this takes priority over `--voice-ref`
+   - Otherwise, only include `--voice-ref` if a voice reference path was provided (not "none")
    - Always include `--backend coreml` unless instructed otherwise
 
 3. Verify output:

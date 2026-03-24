@@ -51,17 +51,28 @@ Then re-run this skill once the build completes.
 
 **Do NOT proceed to Phase 2 until the binary exists.**
 
-### Detect Voice Reference
+### Detect Voice Reference / Speaker Embedding
 
-Look for a voice reference audio file in this order:
-1. Explicit path passed as skill argument (if it ends with `.mp3`)
+First, look for a **pre-computed speaker embedding** (preferred — avoids re-extracting each run):
+1. `speaker_embedding.json` in the slides directory
+2. `speaker_embedding.json` in the parent of the `srt/` directory
+3. Explicit path passed as skill argument (if it ends with `.json`)
+
+If a speaker embedding is found, use `--embedding <path>` (skip voice-ref detection).
+
+Otherwise, look for a **voice reference audio file**:
+1. Explicit path passed as skill argument (if it ends with `.wav` or `.mp3`)
 2. `voice_ref.wav` in the slides directory
 3. `voice_ref.wav` in the parent of the `srt/` directory
 
-If no voice reference is found, prompt the user:
-> No voice reference file found. You can place a 3–10 second mono WAV file named `voice_ref.wav` in the slides directory for voice cloning, or provide a path now. If you skip this, the default model voice will be used.
+If neither is found, prompt the user:
+> No speaker embedding or voice reference file found. You can:
+> - Place `speaker_embedding.json` (pre-computed 192-dim CAM++ embedding) in the slides directory
+> - Place `voice_ref.wav` (3–10 second mono audio) for voice cloning
+> - Provide a path to either file now
+> If you skip this, the default model voice will be used.
 
-Accept their response (a path or "skip"/"no"). If skipped, proceed without `--voice-ref`.
+Accept their response (a path or "skip"/"no"). If skipped, proceed without `--voice-ref` or `--embedding`.
 
 ### Confirm Settings
 
@@ -73,7 +84,7 @@ TTS Synthesis Settings:
   Output:       <path>/audio/
   CLI:          lecture-notes/scripts/tts/.build/release/TTSInfer
   Backend:      coreml (default)
-  Voice ref:    <path> or "default model voice"
+  Voice:        <embedding path> or <voice-ref path> or "default model voice"
 
 Proceed? (yes/no)
 ```
@@ -98,7 +109,7 @@ mkdir -p <slides-directory>/audio
   - The single SRT file path
   - The output directory path
   - The path to the TTS CLI binary
-  - The voice reference path (or empty string if not used)
+  - The speaker embedding path (if available), OR the voice reference path, OR "none"
 - Wait for the agent to complete before spawning the next one
 
 ### Agent Invocation
@@ -110,13 +121,18 @@ Process the following SRT file for TTS synthesis:
 
 CLI: lecture-notes/scripts/tts/.build/release/TTSInfer
 Output directory: <slides-directory>/audio/
+Speaker embedding: <embedding_path or "none">
 Voice reference: <voice_ref_path or "none">
 
 SRT file:
 - <slides-directory>/srt/slide_03.srt
 
 Run:
-  TTSInfer --srt <srt-path> --output <audio-dir>/slide_03.mp3 [--voice-ref <path>] --backend coreml
+  TTSInfer --srt <srt-path> --output <audio-dir>/slide_03.mp3 [--embedding <path.json>] [--voice-ref <path>] --backend coreml
+
+Use --embedding if a speaker embedding path is provided.
+Otherwise, use --voice-ref if a voice reference path is provided.
+Omit both flags if neither is available.
 
 Verify the output MP3 exists and is non-empty. Report success or failure.
 ```
@@ -156,10 +172,13 @@ If yes, spawn a new `tts-worker` for just the failed slides.
 
 ## Voice Cloning Convention
 
-- Place `voice_ref.wav` (3–10 seconds, mono, 16kHz or higher) in the slides directory
+- **Pre-computed embedding (recommended)**: Place `speaker_embedding.json` (flat JSON array of 192 floats, from CAM++) in the slides directory. This is faster — no embedding extraction needed at synthesis time. Generate one with:
+  ```
+  TTSInfer --srt any.srt --output /dev/null --voice-ref voice_ref.wav --save-embedding speaker_embedding.json
+  ```
+- **Voice reference audio**: Place `voice_ref.wav` (3–10 seconds, mono, 16kHz or higher) in the slides directory. The embedding is extracted via the CAM++ encoder each time.
 - Or pass an explicit path as the skill argument
-- The reference audio is used to extract a speaker embedding via the CAM++ encoder in CosyVoice 3
-- If no reference is provided, the model's default voice is used (still high quality)
+- If neither is provided, the model's default voice is used (still high quality)
 
 ## Backend Selection
 
