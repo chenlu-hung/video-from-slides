@@ -13,7 +13,8 @@ let package = Package(
         .executableTarget(
             name: "TTSInfer",
             dependencies: [
-                .product(name: "SpeechSwift", package: "speech-swift"),
+                .product(name: "CosyVoiceTTS", package: "speech-swift"),
+                .product(name: "AudioCommon", package: "speech-swift"),
             ],
             path: "Sources/TTSInfer"
         ),

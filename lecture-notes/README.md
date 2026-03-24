@@ -10,7 +10,10 @@ Generate lecture narration scripts from PDF or TeX slides, and synthesize speech
 - Validates output for content coverage, SRT format, and timing accuracy
 - Supports both Chinese and English slides
 - Synthesizes speech audio from SRT scripts using CosyVoice 3 (Swift/CoreML) or Qwen3-TTS (Python/MLX)
-- Optional voice cloning from a short reference audio file
+- Voice cloning from a reference audio file or directory of samples (multi-sample averaged embedding)
+- Pre-computed speaker embedding support (`--embedding` flag) for faster repeated synthesis
+- Automatic language detection (Chinese/English)
+- Generates Ken Burns effect lecture videos with audio, auto-merges slides and narration
 
 ## Installation
 
@@ -39,11 +42,10 @@ The install script checks and installs all prerequisites (Xcode CLI tools, Homeb
 
 ### Step 2: Synthesize audio from SRT scripts
 
-First, build the Swift TTS CLI (one-time setup):
+The Swift TTS CLI is built automatically by `install.sh`. To rebuild manually:
 
 ```bash
-cd scripts/tts
-swift build -c release
+cd lecture-notes/scripts/tts && swift build -c release
 ```
 
 Then run the skill:
@@ -52,7 +54,20 @@ Then run the skill:
 /tts-synthesis path/to/slides-directory
 ```
 
-For voice cloning, place a 3–10 second mono WAV file named `voice_ref.wav` in your slides directory before running.
+#### Voice cloning options
+
+- **Single file**: Place a 3–10 second mono WAV file named `voice_ref.wav` in your slides directory
+- **Multi-sample** (recommended): Place multiple audio clips in a `voice_refs/` directory for better cloning quality. The CLI averages speaker embeddings from all clips with automatic silence filtering and L2 norm re-normalization.
+- **Pre-computed embedding**: Generate once with `--save-embedding speaker.json`, then reuse with `--embedding speaker.json` for faster synthesis
+
+```bash
+# Compute averaged embedding from multiple samples
+TTSInfer --srt slide.srt --output slide.mp3 \
+  --voice-ref ./voice_refs/ --save-embedding speaker.json
+
+# Reuse pre-computed embedding (skips speaker model loading)
+TTSInfer --srt slide.srt --output slide.mp3 --embedding speaker.json
+```
 
 ### Step 3: Generate lecture video
 
@@ -112,6 +127,18 @@ your-slides-directory/
 
 | Backend | CLI | Model | Notes |
 |---------|-----|-------|-------|
-| CoreML (default) | Swift `TTSInfer` | CosyVoice 3 | Fastest on Apple Silicon, uses Neural Engine |
-| MLX | Swift `TTSInfer` | CosyVoice 3 | `--backend mlx` flag |
+| CoreML (default) | Swift `TTSInfer` | CosyVoice 3 (via [speech-swift](https://github.com/soniqo/speech-swift)) | Fastest on Apple Silicon, uses Neural Engine |
+| MLX | Swift `TTSInfer` | CosyVoice 3 (via [speech-swift](https://github.com/soniqo/speech-swift)) | `--backend mlx` flag |
 | Python fallback | `fallback/tts_infer.py` | Qwen3-TTS 0.6B | `pip install mlx-audio`, auto-downloads model |
+
+## TTSInfer CLI Reference
+
+```
+TTSInfer --srt <path> --output <path>
+  [--voice-ref <file|directory>]  Voice reference for cloning
+  [--embedding <path.json>]       Pre-computed speaker embedding
+  [--save-embedding <path.json>]  Save computed embedding to file
+  [--language <auto|chinese|english>]  Language (default: auto-detect)
+  [--instruction <text>]          Style instruction for CosyVoice3 Instruct
+  [--backend coreml|mlx]          Inference backend (default: coreml)
+```

@@ -92,39 +92,38 @@ mkdir -p <slides-directory>/audio
 
 ### Batch Strategy
 
-- Group SRT files into batches of 3–5
-- For each batch, spawn a `tts-worker` agent using the Agent tool
+- Process one SRT file at a time
+- For each SRT file, spawn a single `tts-worker` agent using the Agent tool
 - Pass each agent:
-  - The list of SRT file paths in its batch
+  - The single SRT file path
   - The output directory path
   - The path to the TTS CLI binary
   - The voice reference path (or empty string if not used)
+- Wait for the agent to complete before spawning the next one
 
 ### Agent Invocation
 
-For each batch, invoke `tts-worker` with a prompt like:
+For each SRT file, invoke `tts-worker` with a prompt like:
 
 ```
-Process the following SRT files for TTS synthesis:
+Process the following SRT file for TTS synthesis:
 
 CLI: lecture-notes/scripts/tts/.build/release/TTSInfer
 Output directory: <slides-directory>/audio/
 Voice reference: <voice_ref_path or "none">
 
-SRT files:
+SRT file:
 - <slides-directory>/srt/slide_03.srt
-- <slides-directory>/srt/slide_04.srt
-- <slides-directory>/srt/slide_05.srt
 
-For each SRT file, run:
-  TTSInfer --srt <srt-path> --output <audio-dir>/slide_XX.mp3 [--voice-ref <path>] --backend coreml
+Run:
+  TTSInfer --srt <srt-path> --output <audio-dir>/slide_03.mp3 [--voice-ref <path>] --backend coreml
 
-Verify each output MP3 exists and is non-empty. Report success or failure per file.
+Verify the output MP3 exists and is non-empty. Report success or failure.
 ```
 
-### Parallel Execution
+### Sequential Execution
 
-Launch multiple `tts-worker` agents in parallel. Each batch is independent.
+Launch one `tts-worker` agent at a time. Wait for each agent to finish before starting the next.
 
 ---
 
