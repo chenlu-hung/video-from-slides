@@ -101,16 +101,18 @@ Proceed? (yes/no)
 mkdir -p <slides-directory>/audio
 ```
 
-### Batch Strategy
+### Execution Strategy — Strictly Sequential
 
-- Process one SRT file at a time
-- For each SRT file, spawn a single `tts-worker` agent using the Agent tool
+**IMPORTANT: Only ONE `tts-worker` agent may run at a time. Do NOT spawn multiple agents in parallel.**
+
+- For each SRT file (in numeric order), spawn a single `tts-worker` agent
+- **Wait for the agent to complete and return its result** before spawning the next agent
+- Never batch multiple SRT files into one agent call — each agent handles exactly one SRT file
 - Pass each agent:
   - The single SRT file path
   - The output directory path
   - The path to the TTS CLI binary
   - The speaker embedding path (if available), OR the voice reference path, OR "none"
-- Wait for the agent to complete before spawning the next one
 
 ### Agent Invocation
 
@@ -139,7 +141,7 @@ Verify the output MP3 exists and is non-empty. Report success or failure.
 
 ### Sequential Execution
 
-Launch one `tts-worker` agent at a time. Wait for each agent to finish before starting the next.
+Launch one `tts-worker` agent at a time. **Wait for it to finish before starting the next.** TTS synthesis is GPU-intensive — running multiple agents in parallel causes memory pressure and degraded output quality. Always process sequentially.
 
 ---
 

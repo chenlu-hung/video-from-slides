@@ -12,7 +12,7 @@ struct Arguments {
     var embeddingPath: String? = nil
     var saveEmbeddingPath: String? = nil
     var backend: String = "coreml"
-    var instruction: String = ""
+    var instruction: String = "Please speak naturally."
     var language: String = "auto"
 }
 
