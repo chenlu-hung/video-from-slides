@@ -4,14 +4,14 @@
     "name": "chenlu-hung"
   },
   "metadata": {
-    "description": "Generate lecture videos from PDF/TeX slides with narration and TTS audio on Apple Silicon"
+    "description": "Generate narrated lecture videos from PDF/TeX slides on Apple Silicon"
   },
   "plugins": [
     {
       "name": "lecture-notes",
       "source": "./lecture-notes",
-      "description": "Generate lecture scripts from slides (PDF/TeX) in SRT format, synthesize speech audio, and produce narrated videos",
-      "version": "0.2.0",
+      "description": "Generate lecture scripts from slides (PDF/TeX) in SRT format, synthesize narration with f5-tts-mlx (via uv), and produce narrated lecture videos",
+      "version": "0.5.0",
       "author": {
         "name": "chenlu-hung"
       }

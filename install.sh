@@ -3,7 +3,7 @@ set -e
 
 # ──────────────────────────────────────────────
 # lecture-notes plugin 安裝腳本
-# 安裝系統依賴、編譯 TTS CLI、註冊 Claude Code plugin
+# 安裝系統依賴並註冊 Claude Code plugin
 # ──────────────────────────────────────────────
 
 BOLD='\033[1m'
@@ -26,14 +26,6 @@ info "檢查系統環境..."
 # macOS
 [[ "$(uname)" == "Darwin" ]] || fail "此工具僅支援 macOS"
 
-# Apple Silicon
-ARCH="$(uname -m)"
-if [[ "$ARCH" == "arm64" ]]; then
-    ok "Apple Silicon ($ARCH)"
-else
-    warn "偵測到 $ARCH — TTS 語音合成需要 Apple Silicon (arm64)"
-fi
-
 # macOS 版本 >= 14
 MACOS_VER="$(sw_vers -productVersion)"
 MACOS_MAJOR="$(echo "$MACOS_VER" | cut -d. -f1)"
@@ -43,19 +35,7 @@ else
     fail "需要 macOS 14+，目前為 $MACOS_VER"
 fi
 
-# ── 2. Xcode 命令列工具 ─────────────────────
-
-info "檢查 Xcode 命令列工具..."
-if xcode-select -p &>/dev/null; then
-    ok "Xcode 命令列工具已安裝"
-else
-    info "安裝 Xcode 命令列工具..."
-    xcode-select --install
-    echo "請在彈出的對話框中點選「安裝」，完成後重新執行此腳本。"
-    exit 0
-fi
-
-# ── 3. Homebrew ──────────────────────────────
+# ── 2. Homebrew ──────────────────────────────
 
 info "檢查 Homebrew..."
 if command -v brew &>/dev/null; then
@@ -63,13 +43,12 @@ if command -v brew &>/dev/null; then
 else
     info "安裝 Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    # 載入 brew 到 PATH
     if [[ -f /opt/homebrew/bin/brew ]]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
     fi
 fi
 
-# ── 4. ffmpeg ────────────────────────────────
+# ── 3. ffmpeg ────────────────────────────────
 
 info "檢查 ffmpeg..."
 if command -v ffmpeg &>/dev/null; then
@@ -80,25 +59,35 @@ else
     ok "ffmpeg 安裝完成"
 fi
 
-# ── 5. 編譯 Swift TTS CLI ────────────────────
+# ── 4. uv 與 f5-tts-mlx (TTS 引擎) ────────────
 
-TTS_DIR="$SCRIPT_DIR/lecture-notes/scripts/tts"
-TTS_BIN="$TTS_DIR/.build/release/TTSInfer"
-
-info "編譯 TTS CLI (TTSInfer)..."
-if [[ -f "$TTS_BIN" ]]; then
-    ok "TTSInfer 已存在，跳過編譯"
-    warn "如需重新編譯，執行: cd $TTS_DIR && swift build -c release"
+info "檢查 uv..."
+if command -v uv &>/dev/null; then
+    ok "uv $(uv --version 2>&1 | awk '{print $NF}')"
 else
-    (cd "$TTS_DIR" && swift build -c release)
-    if [[ -f "$TTS_BIN" ]]; then
-        ok "TTSInfer 編譯完成"
-    else
-        fail "TTSInfer 編譯失敗，請檢查錯誤訊息"
-    fi
+    info "安裝 uv..."
+    brew install uv
 fi
 
-# ── 6. Claude Code CLI ──────────────────────
+PLUGIN_DATA_DIR="${HOME}/.local/share/lecture-notes"
+TTS_DIR="$PLUGIN_DATA_DIR/tts-py"
+
+info "準備 f5-tts-mlx 於 $TTS_DIR ..."
+mkdir -p "$TTS_DIR"
+if [[ ! -f "$TTS_DIR/pyproject.toml" ]]; then
+    (cd "$TTS_DIR" && uv init --bare --no-readme --no-pin-python >/dev/null)
+fi
+(cd "$TTS_DIR" && uv add f5-tts-mlx)
+
+cp "$SCRIPT_DIR/lecture-notes/tts/"*.py "$TTS_DIR/"
+
+if (cd "$TTS_DIR" && uv run --quiet python -c "import f5_tts_mlx, soundfile, numpy" 2>/dev/null); then
+    ok "f5-tts-mlx 已就緒"
+else
+    fail "f5-tts-mlx 環境準備失敗"
+fi
+
+# ── 5. Claude Code CLI ──────────────────────
 
 info "檢查 Claude Code CLI..."
 if command -v claude &>/dev/null; then
@@ -108,11 +97,10 @@ else
     fail "找不到 Claude Code CLI。請先安裝: https://claude.ai/code"
 fi
 
-# ── 7. 註冊 plugin marketplace 並安裝 ────────
+# ── 6. 註冊 plugin marketplace 並安裝 ────────
 
 info "註冊 plugin marketplace..."
 
-# 檢查是否已註冊
 if claude plugin marketplace list 2>&1 | grep -q "video-from-slides"; then
     ok "marketplace 已註冊，更新中..."
     claude plugin marketplace update video-from-slides
@@ -137,10 +125,16 @@ echo -e "${GREEN}${BOLD}安裝完成！${RESET}"
 echo ""
 echo "可用的 skill："
 echo "  /lecture-notes <slides.pdf>        從投影片生成 SRT 講稿"
-echo "  /tts-synthesis <slides-directory>  語音合成（SRT → MP3）"
-echo "  /video-from-slides <slides-dir>    生成教學影片（投影片 + 音訊 → MP4）"
+echo "  /video-from-slides <slides-dir>    生成教學影片（自動 TTS + 投影片 → MP4）"
 echo ""
 echo "快速開始："
 echo "  1. 開啟 Claude Code"
-echo "  2. 輸入 /lecture-notes path/to/slides.pdf"
+echo "  2. /lecture-notes path/to/slides.pdf       # 生成 outline.md 與 srt/"
+echo "  3. 在 slides 目錄放入參考人聲："
+echo "       voice/ref.wav   （24kHz mono、5–10 秒）"
+echo "       voice/ref.txt   （該段語音的逐字稿）"
+echo "  4. /video-from-slides path/to/slides-dir    # 自動以 f5-tts 合成旁白並產出影片"
+echo ""
+echo "提示：第一次執行會下載 f5-tts MLX 模型（約 1.5 GB），請保持網路連線。"
+echo "若 audio/slide_XX.mp3 已存在則跳過 TTS，可用自製音檔。"
 echo ""

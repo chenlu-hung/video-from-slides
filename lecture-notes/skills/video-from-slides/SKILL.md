@@ -17,14 +17,20 @@ Generate lecture videos from PDF slides with narration audio. Each slide becomes
 
 - `ffmpeg` in PATH (`brew install ffmpeg`)
 - Completed `/lecture-notes` pipeline (SRT files in `srt/`)
-- Completed `/tts-synthesis` pipeline (MP3 files in `audio/`)
+- Either of:
+  - **Audio supplied**: per-slide `audio/slide_XX.mp3` already present, OR
+  - **Reference voice for TTS**: `voice/ref.wav` (24kHz mono, 5–10s) + `voice/ref.txt`
+    (the transcript of that clip). The skill will synthesize all missing MP3s via
+    `python -m f5_tts_mlx.generate`, run inside the uv-managed project at
+    `~/.local/share/lecture-notes/tts-py/` (set up by `install.sh`).
 
 ## Workflow Overview
 
-Three phases:
+Four phases:
 1. **Setup & Validation** — Check prerequisites, convert PDF to PNGs, parse sections, confirm settings
-2. **Per-slide Video Generation** — Spawn `video-composer` agents in parallel batches
-3. **Merge** — Ask user for merge strategy, concatenate with ffmpeg
+2. **TTS Synthesis** *(only if any `audio/slide_XX.mp3` is missing)* — Spawn one `tts-synthesizer` agent to fill in the missing audio
+3. **Per-slide Video Generation** — Spawn `video-composer` agents in parallel batches
+4. **Merge** — Ask user for merge strategy, concatenate with ffmpeg
 
 ---
 
@@ -37,10 +43,16 @@ Three phases:
 2. **SRT files**: Check for `srt/slide_*.srt` in the slides directory. If none found, abort with:
    > No SRT files found. Please run `/lecture-notes` first to generate narration scripts.
 
-3. **Audio files**: Check for `audio/slide_*.mp3` in the slides directory. If none found, abort with:
-   > No audio files found. Please run `/tts-synthesis` first to synthesize speech audio.
+3. **Audio files**: Check for `audio/slide_*.mp3` in the slides directory. Build the list of slide numbers that have an SRT but no matching MP3 — call this `missing_audio`.
 
-4. **Cross-reference**: Every SRT file must have a matching MP3 file. Report any mismatches and abort if there are missing audio files.
+   - If `missing_audio` is empty → user supplied all audio, skip Phase 2 (TTS) later.
+   - If `missing_audio` is non-empty → TTS will run in Phase 2. Validate TTS prerequisites now (do **not** abort yet):
+     - `uv` is on PATH (`command -v uv`). If not, abort and tell the user to re-run `install.sh`.
+     - `~/.local/share/lecture-notes/tts-py/pyproject.toml` exists and `f5-tts-mlx` is importable in that env (`uv run --project ~/.local/share/lecture-notes/tts-py --quiet python -c 'import f5_tts_mlx'`). If not, abort and tell the user to re-run `install.sh`.
+     - `voice/ref.wav` exists and is 24kHz mono (`ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,channels -of csv=p=0 voice/ref.wav` should output `24000,1`). If missing or wrong format, abort with the exact expected filenames and format.
+     - `voice/ref.txt` exists and is non-empty.
+
+4. **Cross-reference**: At this point every SRT either has a matching MP3 or is in `missing_audio` (which will be filled in Phase 2).
 
 ### Convert PDF to PNG
 
@@ -113,7 +125,9 @@ Display a summary and ask for confirmation:
 Video Generation Settings:
   Slides:       <N> PNG images in <path>/images/
   SRT files:    <N> files in <path>/srt/
-  Audio files:  <N> files in <path>/audio/
+  Audio files:  <K> existing, <M> to synthesize (or "all existing" / "all to synthesize")
+  TTS engine:   f5-tts-mlx via uv (only if M > 0)
+  Reference:    voice/ref.wav  (only if M > 0)
   Output:       <path>/video/
   Resolution:   1920x1080
   FPS:          30
@@ -127,7 +141,41 @@ Proceed? (yes/no)
 
 ---
 
-## Phase 2: Per-slide Video Generation
+## Phase 2: TTS Synthesis *(skip if `missing_audio` is empty)*
+
+### Create Output Directory
+
+```bash
+mkdir -p <slides-directory>/audio
+```
+
+### Agent Invocation
+
+Spawn **one** `tts-synthesizer` agent (do not batch — MLX uses unified memory and concurrent runs would OOM). Pass the agent:
+
+- `<slides-directory>` — absolute path
+- `<tts-project-dir>` — `~/.local/share/lecture-notes/tts-py` (expanded to an absolute path; the uv project where `f5-tts-mlx` is installed)
+- `<ref-wav>` — `<slides-directory>/voice/ref.wav`
+- `<ref-text>` — contents of `<slides-directory>/voice/ref.txt`, read by the skill and passed inline
+- The list of slide numbers in `missing_audio`
+
+Tell the agent: process slides sequentially, write outputs to `<slides-directory>/audio/slide_NN.mp3`, verify each MP3 duration is within ±10% of the SRT target (retry once with bumped `--speed` if too long).
+
+### Heads-up About First Run
+
+The first `python -m f5_tts_mlx.generate` invocation downloads the MLX checkpoint (~1.5 GB) from Hugging Face into `~/.cache/huggingface/`. Surface a one-line notice to the user before spawning the agent so the apparent stall on slide 1 is expected.
+
+### Optional: Alternate Checkpoints for Better Mandarin
+
+The default `lucasnewman/f5-tts-mlx` checkpoint covers English well and Mandarin reasonably. For better Traditional Chinese results, advanced users can edit the agent prompt to pass `--model <alternate-repo-id>` to `python -m f5_tts_mlx.generate`. Surface this hint in the post-run summary only if the user reports Mandarin quality issues.
+
+### After Synthesis
+
+Re-check that every SRT now has a matching MP3. If any are still missing (TTS failed for them), ask the user whether to retry only the failed slides or abort.
+
+---
+
+## Phase 3: Per-slide Video Generation
 
 ### Create Output Directory
 
@@ -178,7 +226,7 @@ Launch multiple `video-composer` agents in parallel. Each batch is independent.
 
 ---
 
-## Phase 3: Merge
+## Phase 4: Merge
 
 ### Verify All Slide Videos
 

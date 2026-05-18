@@ -1,4 +1,4 @@
 .DS_Store
-.build/
-.swiftpm/
 .claude/
+__pycache__/
+*.pyc
