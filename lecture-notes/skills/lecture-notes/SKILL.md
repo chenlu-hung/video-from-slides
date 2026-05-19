@@ -96,7 +96,7 @@ mkdir -p <slides-directory>/srt
 Each `slide_XX.srt` file:
 - Starts timing from `00:00:00,000` (each slide is independent)
 - Each subtitle block: sequence number, timecode line, text (max 2 lines per block, ~20 CJK chars or ~42 Latin chars per line), blank line separator
-- Total duration of all blocks should match the duration specified in the outline
+- **Per-block timecodes reflect natural speech pace** (CJK at ~250 chars/min, English at ~150 wpm). Do **not** evenly space blocks across the outline's target duration — that produced the broken 15-seconds-per-block scripts the new TTS pipeline can't realign. If the natural total drifts from the outline's target, adjust narration text volume, not timecodes.
 
 Example:
 ```
@@ -120,8 +120,9 @@ After all agents complete, spawn a `script-reviewer` agent to check:
 
 1. **Content coverage** — each slide's SRT covers the key points from the outline
 2. **SRT format** — valid SRT structure (sequence numbers, timecodes, text blocks)
-3. **Timing accuracy** — total duration per slide within ±15% of the outline target
-4. **Subtitle length** — each text block ≤ 2 lines, within character limits
-5. **Language consistency** — matches the language of the slides
+3. **Per-block timing** — each block's `end - start` is within ±25% of the speech-rate estimate from its text length (catches the "evenly spaced" bug)
+4. **Slide total** — slide total within ±15% of the outline target indicates well-sized content
+5. **Subtitle length** — each text block ≤ 2 lines, within character limits
+6. **Language consistency** — matches the language of the slides
 
 Present the review results to the user with any issues found, and offer to regenerate problematic slides.
