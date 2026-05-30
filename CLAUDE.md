@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a Claude Code plugin (`lecture-notes`) that converts PDF/TeX lecture slides into narrated lecture videos. The workflow is:
 
 1. `/lecture-notes <slides.pdf>` — generates an outline (grouping Beamer-style overlay pages into logical slides), then batch-produces SRT narration scripts via parallel agents
-2. `/video-from-slides <slides-directory>` — auto-runs `f5-tts-mlx` (Python, via uv) to synthesize per-page narration (using `voice/ref.wav` + `voice/ref.txt` for voice cloning) when `audio/` is missing or incomplete, then generates per-page video segments (Ken Burns effect + audio) and merges them. Overlay build-ups play as a continuous reveal; source aspect ratio is auto-detected. Users may still pre-populate `audio/slide_XX.mp3` to skip TTS.
+2. `/video-from-slides <slides-directory>` — auto-runs VoxCPM2 (via `mlx-audio`, Python under uv) to synthesize per-page narration (using `voice/ref.wav` + `voice/ref.txt` for voice cloning) when `audio/` is missing or incomplete, then generates per-page video segments (Ken Burns effect + audio) and merges them. Overlay build-ups play as a continuous reveal; source aspect ratio is auto-detected. Users may still pre-populate `audio/slide_XX.mp3` to skip TTS.
 
 ## Architecture
 
@@ -19,16 +19,16 @@ The project is structured as a **Claude Code plugin** (manifest at `lecture-note
 - **Agents** (`lecture-notes/agents/`): Specialized sub-agents spawned by skills
   - `script-generator` (Sonnet, cyan) — writes SRT narration for a batch of 1–5 logical slides; for overlay build-ups, writes delta narration (one SRT per narrate page)
   - `script-reviewer` (Sonnet, yellow) — validates SRT format, timing, and content coverage
-  - `tts-synthesizer` (Sonnet, magenta) — runs `f5-tts-mlx` (Python via uv) per narrate page, matching SRT target duration
+  - `tts-synthesizer` (Sonnet, magenta) — runs VoxCPM2 via `mlx-audio` (Python under uv) per narrate page, assembling each SRT block on a timeline that matches the SRT total duration
   - `video-composer` (Sonnet, green) — ffmpeg Ken Burns video + audio mux per narrate page (aspect-ratio-aware, per-logical-slide continuous zoom)
 
 ## Build Commands
 
 ```bash
-# install.sh handles everything: ffmpeg, uv + f5-tts-mlx, and plugin registration.
+# install.sh handles everything: ffmpeg, uv + mlx-audio (VoxCPM2), and plugin registration.
 # Manual prerequisites if running pieces by hand:
 brew install ffmpeg uv               # ffmpeg for video, uv for Python TTS env
-# uv project with f5-tts-mlx lives at ~/.local/share/lecture-notes/tts-py/
+# uv project with mlx-audio (VoxCPM2) lives at ~/.local/share/lecture-notes/tts-py/
 ```
 
 ## Key Conventions
@@ -43,5 +43,6 @@ brew install ffmpeg uv               # ffmpeg for video, uv for Python TTS env
 - Speaking rate: Chinese ~250 chars/min, English ~150 words/min
 - All skills require user confirmation before proceeding to their generation phase
 - Agents run in parallel batches; no dependencies between batches — **except** `tts-synthesizer`, which runs as a single agent processing slides sequentially because MLX uses unified memory
-- Audio files (`audio/slide_XX.mp3`) are produced by `tts-synthesizer` when missing, using `voice/ref.wav` (24kHz mono, 5–10s) + `voice/ref.txt` as the voice-cloning reference. Pre-existing MP3s are left untouched.
-- The f5-tts MLX checkpoint (~1.5 GB) downloads to `~/.cache/huggingface/` on first use; expect a one-time stall before slide 1.
+- Audio files (`audio/slide_XX.mp3`) are produced by `tts-synthesizer` when missing, using `voice/ref.wav` (mono, 5–10s; VoxCPM2 resamples internally) + `voice/ref.txt` as the voice-cloning reference. Pre-existing MP3s are left untouched.
+- VoxCPM2 has no duration control (unlike f5-tts), so the SRT follows the audio: the TTS helper runs in `--timing natural` (blocks play at natural pace, each starting no earlier than its original SRT start) and writes a **corrected SRT** to `srt-synced/slide_XX.srt` whose cue timings match the synthesized audio. The merge step prefers `srt-synced/` over `srt/`, so within-slide subtitles stay in sync even though a slide may run a little longer than the original script. (Legacy `--timing pin` — compress/overflow to honour the original SRT — is still available but unused by default.)
+- The VoxCPM2-8bit MLX checkpoint (~3.2 GB) downloads to `~/.cache/huggingface/` on first use; expect a one-time stall before slide 1.

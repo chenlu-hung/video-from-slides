@@ -1,6 +1,6 @@
 # lecture-notes
 
-從 PDF 或 TeX 投影片自動生成講稿，使用 [f5-tts-mlx](https://github.com/lucasnewman/f5-tts-mlx)（Python，透過 [uv](https://github.com/astral-sh/uv) 執行）在本機合成旁白，並輸出含 Ken Burns 效果的教學影片。
+從 PDF 或 TeX 投影片自動生成講稿，使用 [VoxCPM2](https://huggingface.co/mlx-community/VoxCPM2-8bit)（透過 [mlx-audio](https://github.com/Blaizzy/mlx-audio)，Python 以 [uv](https://github.com/astral-sh/uv) 執行）在本機合成旁白，並輸出含 Ken Burns 效果的教學影片。
 
 ## 功能
 
@@ -10,7 +10,7 @@
 - 以平行 agent 批次生成 SRT 格式講稿（每批 1–5 張邏輯投影片）
 - 自動驗證內容覆蓋度、SRT 格式正確性及時間準確性
 - 支援中英文投影片，亦支援同一張投影片內中英夾雜
-- 以 f5-tts-mlx（Python + MLX、Apple Silicon）合成旁白，可用專案提供的人聲樣本進行 voice cloning，並對齊每頁 SRT 總長度
+- 以 VoxCPM2（mlx-audio、Apple Silicon）合成旁白，可用專案提供的人聲樣本進行 voice cloning；由於 VoxCPM2 無法指定時長，旁白以自然語速合成，並輸出對齊實際語音的修正版 SRT（`srt-synced/`）讓字幕保持同步
 - 生成含 Ken Burns 效果的教學影片（縮放在每個 overlay 建構過程中連續進行）；**自動偵測來源長寬比**（4:3、16:9 等），投影片不會被壓扁或誤加黑邊
 
 ## 安裝
@@ -21,7 +21,7 @@ cd video-from-slides
 ./install.sh
 ```
 
-安裝腳本會自動檢查/安裝依賴（Homebrew、ffmpeg、uv），在 `~/.local/share/lecture-notes/tts-py/` 建立 uv 專案並安裝 `f5-tts-mlx`，並把 plugin 註冊到 Claude Code。
+安裝腳本會自動檢查/安裝依賴（Homebrew、ffmpeg、uv），在 `~/.local/share/lecture-notes/tts-py/` 建立 uv 專案並安裝 `mlx-audio`（VoxCPM2），並把 plugin 註冊到 Claude Code。
 
 ## 系統需求
 
@@ -42,13 +42,13 @@ cd video-from-slides
 
 在投影片目錄底下建立：
 
-- `voice/ref.wav` — 24kHz mono WAV，目標講者 5–10 秒語音樣本
+- `voice/ref.wav` — mono WAV，目標講者 5–10 秒語音樣本（取樣率不限，VoxCPM2 會自動重採樣）
 - `voice/ref.txt` — `ref.wav` 對應的逐字稿
 
-如需轉檔可用 ffmpeg：
+如需轉成單聲道可用 ffmpeg：
 
 ```bash
-ffmpeg -i source.m4a -ac 1 -ar 24000 voice/ref.wav
+ffmpeg -i source.m4a -ac 1 voice/ref.wav
 ```
 
 若想對部分投影片改用自製音檔，直接把 `audio/slide_XX.mp3` 放好即可——已存在的 MP3 不會被覆寫，TTS 只會補齊缺漏的頁。
@@ -59,7 +59,7 @@ ffmpeg -i source.m4a -ac 1 -ar 24000 voice/ref.wav
 /video-from-slides path/to/slides-directory
 ```
 
-首次執行會下載 f5-tts MLX 模型（約 1.5 GB），之後會使用快取。可選擇合併所有投影片為一支影片，或按章節分段合併。
+首次執行會下載 VoxCPM2-8bit MLX 模型（約 3.2 GB），之後會使用快取。可選擇合併所有投影片為一支影片，或按章節分段合併。
 
 ## 工作流程
 
@@ -72,7 +72,7 @@ ffmpeg -i source.m4a -ac 1 -ar 24000 voice/ref.wav
 ### 影片生成（`/video-from-slides`）
 
 1. **準備** — 檢查 SRT、參考人聲與 TTS 執行檔；PDF 轉 PNG；從 `outline.md` 解析 overlay 分群與章節；自動偵測長寬比
-2. **TTS** —（`audio/` 已備齊時跳過）啟動 `tts-synthesizer` agent，逐頁呼叫 `python -m f5_tts_mlx.generate`（透過 uv）並對齊每頁 SRT 總長度
+2. **TTS** —（`audio/` 已備齊時跳過）啟動 `tts-synthesizer` agent，逐頁以 VoxCPM2（mlx-audio、透過 uv）自然語速合成，並輸出對齊語音的修正版 SRT 到 `srt-synced/`
 3. **合成影片** — 為每張講述頁製作 Ken Burns 影片並合併音訊；縮放在每個 overlay 建構過程中連續進行，並在下一張邏輯投影片重置
 4. **合併** — 選擇合併策略（全部合併 / 按章節 / 兩者皆要）；輸出最終影片與外部 `final.srt`
 
@@ -83,13 +83,16 @@ your-slides-directory/
 ├── slides.pdf
 ├── outline.md
 ├── voice/
-│   ├── ref.wav             （參考人聲，24kHz mono）
+│   ├── ref.wav             （參考人聲，mono）
 │   └── ref.txt             （ref.wav 的逐字稿）
-├── srt/                   （每張講述頁一個；overlay 合併掉的頁不產生）
+├── srt/                   （原始講稿，每張講述頁一個；overlay 合併掉的頁不產生）
 │   ├── slide_01.srt
 │   ├── slide_02.srt
 │   └── ...
-├── audio/                  （由 f5-tts-mlx 自動合成，或自備）
+├── srt-synced/            （對齊實際語音的修正版 SRT）
+│   ├── slide_01.srt
+│   └── ...
+├── audio/                  （由 VoxCPM2 自動合成，或自備）
 │   ├── slide_01.mp3
 │   ├── slide_02.mp3
 │   └── ...

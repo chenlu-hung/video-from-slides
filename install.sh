@@ -59,7 +59,7 @@ else
     ok "ffmpeg 安裝完成"
 fi
 
-# ── 4. uv 與 f5-tts-mlx (TTS 引擎) ────────────
+# ── 4. uv 與 TTS 引擎 (mlx-audio / VoxCPM2 + f5-tts-mlx) ────────────
 
 info "檢查 uv..."
 if command -v uv &>/dev/null; then
@@ -72,19 +72,22 @@ fi
 PLUGIN_DATA_DIR="${HOME}/.local/share/lecture-notes"
 TTS_DIR="$PLUGIN_DATA_DIR/tts-py"
 
-info "準備 f5-tts-mlx 於 $TTS_DIR ..."
+info "準備 TTS 引擎於 $TTS_DIR ..."
 mkdir -p "$TTS_DIR"
 if [[ ! -f "$TTS_DIR/pyproject.toml" ]]; then
     (cd "$TTS_DIR" && uv init --bare --no-readme --no-pin-python >/dev/null)
 fi
-(cd "$TTS_DIR" && uv add f5-tts-mlx)
+# 預設 TTS 引擎：mlx-audio（VoxCPM2）。f5-tts-mlx 仍保留以便比較。
+# 注意：VoxCPM2 架構目前只在 mlx-audio 的 GitHub main，尚未發行到 PyPI（最新 0.4.3 只有 voxcpm v1），
+# 因此暫時從 git 安裝。待 voxcpm2 進入正式 release 後可改回 `uv add mlx-audio`。
+(cd "$TTS_DIR" && uv add "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git" f5-tts-mlx)
 
 cp "$SCRIPT_DIR/lecture-notes/tts/"*.py "$TTS_DIR/"
 
-if (cd "$TTS_DIR" && uv run --quiet python -c "import f5_tts_mlx, soundfile, numpy" 2>/dev/null); then
-    ok "f5-tts-mlx 已就緒"
+if (cd "$TTS_DIR" && uv run --quiet python -c "import mlx_audio, soundfile, numpy" 2>/dev/null); then
+    ok "mlx-audio (VoxCPM2) 已就緒"
 else
-    fail "f5-tts-mlx 環境準備失敗"
+    fail "mlx-audio 環境準備失敗"
 fi
 
 # ── 5. Claude Code CLI ──────────────────────
@@ -133,8 +136,8 @@ echo "  2. /lecture-notes path/to/slides.pdf       # 生成 outline.md 與 srt/"
 echo "  3. 在 slides 目錄放入參考人聲："
 echo "       voice/ref.wav   （24kHz mono、5–10 秒）"
 echo "       voice/ref.txt   （該段語音的逐字稿）"
-echo "  4. /video-from-slides path/to/slides-dir    # 自動以 f5-tts 合成旁白並產出影片"
+echo "  4. /video-from-slides path/to/slides-dir    # 自動以 VoxCPM2 合成旁白並產出影片"
 echo ""
-echo "提示：第一次執行會下載 f5-tts MLX 模型（約 1.5 GB），請保持網路連線。"
+echo "提示：第一次執行會下載 VoxCPM2-8bit MLX 模型（約 3.2 GB），請保持網路連線。"
 echo "若 audio/slide_XX.mp3 已存在則跳過 TTS，可用自製音檔。"
 echo ""

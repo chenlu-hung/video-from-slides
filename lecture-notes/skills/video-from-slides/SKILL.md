@@ -21,9 +21,10 @@ Generate lecture videos from PDF slides with narration audio. Each narrate page 
 - Completed `/lecture-notes` pipeline (SRT files in `srt/`)
 - Either of:
   - **Audio supplied**: per-slide `audio/slide_XX.mp3` already present, OR
-  - **Reference voice for TTS**: `voice/ref.wav` (24kHz mono, 5–10s) + `voice/ref.txt`
-    (the transcript of that clip). The skill will synthesize all missing MP3s via
-    `python -m f5_tts_mlx.generate`, run inside the uv-managed project at
+  - **Reference voice for TTS**: `voice/ref.wav` (mono, 5–10s; any sample rate —
+    VoxCPM2 resamples internally) + `voice/ref.txt` (the transcript of that clip).
+    The skill will synthesize all missing MP3s with VoxCPM2 via the `mlx-audio`
+    helper, run inside the uv-managed project at
     `~/.local/share/lecture-notes/tts-py/` (set up by `install.sh`).
 
 ## Workflow Overview
@@ -56,8 +57,8 @@ Four phases:
    - If `missing_audio` is empty → user supplied all audio, skip Phase 2 (TTS) later.
    - If `missing_audio` is non-empty → TTS will run in Phase 2. Validate TTS prerequisites now (do **not** abort yet):
      - `uv` is on PATH (`command -v uv`). If not, abort and tell the user to re-run `install.sh`.
-     - `~/.local/share/lecture-notes/tts-py/pyproject.toml` exists and `f5-tts-mlx` is importable in that env (`uv run --project ~/.local/share/lecture-notes/tts-py --quiet python -c 'import f5_tts_mlx'`). If not, abort and tell the user to re-run `install.sh`.
-     - `voice/ref.wav` exists and is 24kHz mono (`ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,channels -of csv=p=0 voice/ref.wav` should output `24000,1`). If missing or wrong format, abort with the exact expected filenames and format.
+     - `~/.local/share/lecture-notes/tts-py/pyproject.toml` exists and `mlx-audio` is importable in that env (`uv run --project ~/.local/share/lecture-notes/tts-py --quiet python -c 'import mlx_audio'`). If not, abort and tell the user to re-run `install.sh`.
+     - `voice/ref.wav` exists and is mono (`ffprobe -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 voice/ref.wav` should output `1`). Sample rate is unconstrained — VoxCPM2 resamples internally. If missing or not mono, abort with the exact expected filenames and format.
      - `voice/ref.txt` exists and is non-empty.
 
 4. **Cross-reference**: At this point every SRT either has a matching MP3 or is in `missing_audio` (which will be filled in Phase 2).
@@ -171,7 +172,7 @@ Video Generation Settings:
   Logical slides: <L>  (<G> overlay build-ups collapsing <P-L+G> sub-frames)
   Narrate pages: <N> (= SRT files in <path>/srt/; merged sub-frames omitted)
   Audio files:  <K> existing, <M> to synthesize (or "all existing" / "all to synthesize")
-  TTS engine:   f5-tts-mlx via uv (only if M > 0)
+  TTS engine:   VoxCPM2 (mlx-audio) via uv (only if M > 0)
   Reference:    voice/ref.wav  (only if M > 0)
   Output:       <path>/video/
   Aspect ratio: <W>x<H> source → inner <inner_w>x<inner_h>, pad <pad_x>/<pad_y> (e.g. "16:9 → no bars" / "4:3 → 240px pillarbox")
@@ -203,20 +204,20 @@ mkdir -p <slides-directory>/audio
 Spawn **one** `tts-synthesizer` agent (do not batch — MLX uses unified memory and concurrent runs would OOM). Pass the agent:
 
 - `<slides-directory>` — absolute path
-- `<tts-project-dir>` — `~/.local/share/lecture-notes/tts-py` (expanded to an absolute path; the uv project where `f5-tts-mlx` is installed)
+- `<tts-project-dir>` — `~/.local/share/lecture-notes/tts-py` (expanded to an absolute path; the uv project where `mlx-audio` is installed)
 - `<ref-wav>` — `<slides-directory>/voice/ref.wav`
 - `<ref-text>` — contents of `<slides-directory>/voice/ref.txt`, read by the skill and passed inline
 - The list of slide numbers in `missing_audio`
 
-Tell the agent: process slides sequentially, write outputs to `<slides-directory>/audio/slide_NN.mp3`, verify each MP3 duration is within ±10% of the SRT target (retry once with bumped `--speed` if too long).
+Tell the agent: process slides sequentially, write outputs to `<slides-directory>/audio/slide_NN.mp3` and a corrected per-slide SRT to `<slides-directory>/srt-synced/slide_NN.srt`. The helper runs in `--timing natural` (VoxCPM2 has no speed control, so it plays at natural pace and the corrected SRT follows the audio — see the agent prompt). The agent reports each slide's natural-pace drift (`+Xs over SRT`); a large drift means that script was timed tight and the user may want to loosen it, but the audio/subtitles stay in sync regardless.
 
 ### Heads-up About First Run
 
-The first `python -m f5_tts_mlx.generate` invocation downloads the MLX checkpoint (~1.5 GB) from Hugging Face into `~/.cache/huggingface/`. Surface a one-line notice to the user before spawning the agent so the apparent stall on slide 1 is expected.
+The first synthesis call downloads the VoxCPM2-8bit MLX checkpoint (~3.2 GB) from Hugging Face into `~/.cache/huggingface/`. Surface a one-line notice to the user before spawning the agent so the apparent stall on slide 1 is expected.
 
-### Optional: Alternate Checkpoints for Better Mandarin
+### Optional: Alternate Checkpoints and Tuning
 
-The default `lucasnewman/f5-tts-mlx` checkpoint covers English well and Mandarin reasonably. For better Traditional Chinese results, advanced users can edit the agent prompt to pass `--model <alternate-repo-id>` to `python -m f5_tts_mlx.generate`. Surface this hint in the post-run summary only if the user reports Mandarin quality issues.
+The default `mlx-community/VoxCPM2-8bit` is multilingual (Chinese included) and a good speed/quality balance. Advanced users can edit the agent prompt to pass `--model mlx-community/VoxCPM2-4bit` (lighter/faster) or `mlx-community/VoxCPM2-bf16` (highest quality), and tune `--inference-timesteps` / `--cfg`. Surface this hint in the post-run summary only if the user reports voice quality issues.
 
 ### After Synthesis
 
@@ -427,6 +428,8 @@ For section merges, build one concat list per section from that section's narrat
 
 After concatenation (or per-section), generate a single `final.srt` (or per-section SRT) that covers the full video timeline. Use **actual MP4 durations** (not SRT end timestamps) as the offset ground truth, so subtitle timing matches the video exactly even if audio was trimmed.
 
+For each narrate page the script prefers the **corrected** per-slide SRT in `srt-synced/` (written by the TTS helper, with cue timings matching the synthesized audio) and falls back to the original `srt/` only when no corrected one exists (e.g. user-supplied audio). This keeps within-slide subtitle timing exact under VoxCPM2's natural pacing.
+
 This script already handles overlay grouping for free: it iterates the SRTs that **exist** (one per narrate page — merged pages contribute none) and shifts each by the cumulative segment duration, so the per-step cues of a build-up land back-to-back and flow seamlessly into the next logical slide.
 
 Write and run the following Python script:
@@ -443,6 +446,12 @@ from pathlib import Path
 SLIDES_DIR = Path("<slides-directory>")
 VIDEO_DIR  = SLIDES_DIR / "video"
 SRT_DIR    = SLIDES_DIR / "srt"
+SYNCED_DIR = SLIDES_DIR / "srt-synced"   # corrected SRTs (cues match the audio)
+
+def pick_srt(n):
+    """Prefer the corrected SRT in srt-synced/; fall back to the original srt/."""
+    synced = SYNCED_DIR / f"slide_{n:02d}.srt"
+    return synced if synced.exists() else SRT_DIR / f"slide_{n:02d}.srt"
 
 def get_mp4_duration(path):
     r = subprocess.run(
@@ -486,7 +495,7 @@ all_entries = []
 entry_idx   = 1
 
 for n in slide_nums:
-    srt_path = SRT_DIR / f"slide_{n:02d}.srt"
+    srt_path = pick_srt(n)
     mp4_path = VIDEO_DIR / f"slide_{n:02d}.mp4"
 
     if mp4_path.exists():
