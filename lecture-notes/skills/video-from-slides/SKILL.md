@@ -124,7 +124,7 @@ Video Generation Settings:
   Slides:       <N> PNG images in <path>/images/
   SRT files:    <N> files in <path>/srt/
   Audio files:  <K> existing, <M> to synthesize (or "all existing" / "all to synthesize")
-  TTS engine:   f5-tts-mlx via uv (only if M > 0)
+  TTS engine:   f5-tts-mlx-quantized (4-bit) via uv (only if M > 0)
   Reference:    voice/ref.wav  (only if M > 0)
   Output:       <path>/video/
   Resolution:   1920x1080 (4:3 slides pillarboxed in 16:9)
@@ -162,11 +162,11 @@ Tell the agent: process slides sequentially, write outputs to `<slides-directory
 
 ### Heads-up About First Run
 
-The first `python -m f5_tts_mlx.generate` invocation downloads the MLX checkpoint (~1.5 GB) from Hugging Face into `~/.cache/huggingface/`. Surface a one-line notice to the user before spawning the agent so the apparent stall on slide 1 is expected.
+The first `python -m f5_tts_mlx.generate` invocation downloads the 4-bit MLX checkpoint (~223 MB) from Hugging Face into `~/.cache/huggingface/`. Surface a one-line notice to the user before spawning the agent so the apparent stall on slide 1 is expected.
 
 ### Optional: Alternate Checkpoints for Better Mandarin
 
-The default `lucasnewman/f5-tts-mlx` checkpoint covers English well and Mandarin reasonably. For better Traditional Chinese results, advanced users can edit the agent prompt to pass `--model <alternate-repo-id>` to `python -m f5_tts_mlx.generate`. Surface this hint in the post-run summary only if the user reports Mandarin quality issues.
+The default `alandao/f5-tts-mlx-4bit` checkpoint (4-bit quantized) covers English well and Mandarin reasonably while keeping the download ~223 MB. For better Traditional Chinese results, advanced users can edit the agent prompt to pass `--model <alternate-repo-id>` to `python -m f5_tts_mlx.generate` (the weights must be loadable by `f5-tts-mlx-quantized`). Surface this hint in the post-run summary only if the user reports Mandarin quality issues.
 
 ### After Synthesis
 

@@ -59,7 +59,7 @@ else
     ok "ffmpeg 安裝完成"
 fi
 
-# ── 4. uv 與 f5-tts-mlx (TTS 引擎) ────────────
+# ── 4. uv 與 f5-tts-mlx-quantized (TTS 引擎) ────────────
 
 info "檢查 uv..."
 if command -v uv &>/dev/null; then
@@ -72,19 +72,26 @@ fi
 PLUGIN_DATA_DIR="${HOME}/.local/share/lecture-notes"
 TTS_DIR="$PLUGIN_DATA_DIR/tts-py"
 
-info "準備 f5-tts-mlx 於 $TTS_DIR ..."
+info "準備 f5-tts-mlx-quantized 於 $TTS_DIR ..."
 mkdir -p "$TTS_DIR"
 if [[ ! -f "$TTS_DIR/pyproject.toml" ]]; then
     (cd "$TTS_DIR" && uv init --bare --no-readme --no-pin-python >/dev/null)
 fi
-(cd "$TTS_DIR" && uv add f5-tts-mlx)
+# 從舊版（標準 f5-tts-mlx）升級時先移除，避免兩套件搶 f5_tts_mlx 模組名
+(cd "$TTS_DIR" && uv remove f5-tts-mlx >/dev/null 2>&1 || true)
+(cd "$TTS_DIR" && uv add f5-tts-mlx-quantized)
 
 cp "$SCRIPT_DIR/lecture-notes/tts/"*.py "$TTS_DIR/"
 
+# f5-tts-mlx-quantized 0.1.1 的 lens_to_mask 漏了 .item()，在新版 mlx
+# （mx.arange 只收 int/float）會丟 TypeError。對齊上游 0.2.x 寫法；此 sed 冪等。
+find "$TTS_DIR/.venv" -path "*/f5_tts_mlx/utils.py" -exec \
+    sed -i '' 's/length = t.max()$/length = t.max().item()/' {} +
+
 if (cd "$TTS_DIR" && uv run --quiet python -c "import f5_tts_mlx, soundfile, numpy" 2>/dev/null); then
-    ok "f5-tts-mlx 已就緒"
+    ok "f5-tts-mlx-quantized 已就緒"
 else
-    fail "f5-tts-mlx 環境準備失敗"
+    fail "f5-tts-mlx-quantized 環境準備失敗"
 fi
 
 # ── 5. Claude Code CLI ──────────────────────
@@ -135,6 +142,6 @@ echo "       voice/ref.wav   （24kHz mono、5–10 秒）"
 echo "       voice/ref.txt   （該段語音的逐字稿）"
 echo "  4. /video-from-slides path/to/slides-dir    # 自動以 f5-tts 合成旁白並產出影片"
 echo ""
-echo "提示：第一次執行會下載 f5-tts MLX 模型（約 1.5 GB），請保持網路連線。"
+echo "提示：第一次執行會下載 f5-tts-mlx-quantized 4-bit 模型（約 223 MB），請保持網路連線。"
 echo "若 audio/slide_XX.mp3 已存在則跳過 TTS，可用自製音檔。"
 echo ""

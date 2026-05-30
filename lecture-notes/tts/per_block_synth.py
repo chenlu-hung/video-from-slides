@@ -9,7 +9,7 @@ end timecode, so downstream Ken Burns video composition stays in sync.
 Usage:
     python per_block_synth.py \
         --srt <slide.srt> --ref-audio <ref.wav> --ref-text "..." \
-        --output <slide.wav> [--seed 42] [--model lucasnewman/f5-tts-mlx]
+        --output <slide.wav> [--seed 42] [--model alandao/f5-tts-mlx-4bit]
 """
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def main() -> int:
     p.add_argument("--ref-text", required=True)
     p.add_argument("--output", required=True, type=Path)
     p.add_argument("--seed", type=int, default=None)
-    p.add_argument("--model", default="lucasnewman/f5-tts-mlx")
+    p.add_argument("--model", default="alandao/f5-tts-mlx-4bit")
     args = p.parse_args()
 
     blocks = parse_srt(args.srt)
