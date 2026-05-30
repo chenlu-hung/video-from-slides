@@ -4,13 +4,14 @@ Generate lecture narration scripts from PDF or TeX slides, synthesize the narrat
 
 ## Features
 
-- Reads PDF or TeX slides and estimates speaking duration per slide
-- Generates an editable `outline.md` for review before script generation
-- Batch-generates SRT narration scripts using parallel agents (1–5 slides per batch)
+- Reads PDF or TeX slides and estimates speaking duration per logical slide
+- **Overlay-aware** — groups Beamer-style overlay pages (`\pause`, `\onslide`, …) into one logical slide, so a deck that exports as many incremental pages is narrated once and plays as a continuous step-by-step reveal instead of repeating near-identical pages
+- Generates an editable `outline.md` (including the overlay grouping) for review before script generation
+- Batch-generates SRT narration scripts using parallel agents (1–5 logical slides per batch)
 - Validates output for content coverage, SRT format, and timing accuracy
 - Supports both Chinese and English slides (and mixed zh/en in the same slide)
 - Synthesizes narration with f5-tts-mlx (Python + MLX, Apple Silicon) — clones a project-supplied reference voice and matches each slide's SRT total duration
-- Generates Ken Burns effect lecture videos with audio, auto-merges slides and narration
+- Generates Ken Burns effect lecture videos with audio (zoom runs continuously across each overlay build-up); **auto-detects source aspect ratio** (4:3, 16:9, …) so slides are never stretched or wrongly pillarboxed
 
 ## Installation
 
@@ -64,16 +65,16 @@ The first run downloads the f5-tts MLX checkpoint (~1.5 GB); subsequent runs are
 
 ### Script Generation (`/lecture-notes`)
 
-1. **Outline** — Reads slides, estimates duration, produces `outline.md` for your review
-2. **Generate** — After you confirm the outline, spawns agents to generate `srt/slide_XX.srt` files
+1. **Outline** — Reads slides, groups overlay pages into logical slides, estimates duration, produces `outline.md` (with an `OVERLAY-GROUPS` table you can edit) for your review
+2. **Generate** — After you confirm the outline, spawns agents to generate `srt/slide_XX.srt` files (one per narrated page; for overlay build-ups each step is a short delta that flows on from the last)
 3. **Review** — Validates all SRT files and reports any issues
 
 ### Video Generation (`/video-from-slides`)
 
-1. **Setup** — Checks SRT, reference voice, and TTS binary; converts PDF to PNGs; parses sections
-2. **TTS** — *(skipped if `audio/` is already complete)* Spawns a `tts-synthesizer` agent that runs `python -m f5_tts_mlx.generate` (via uv) sequentially, one slide at a time, matching each SRT's target duration
-3. **Compose** — Spawns parallel agents to create Ken Burns videos with audio per slide
-4. **Merge** — User chooses merge strategy (all / by section / both)
+1. **Setup** — Checks SRT, reference voice, and TTS binary; converts PDF to PNGs; parses the overlay groups + sections from `outline.md`; auto-detects aspect ratio
+2. **TTS** — *(skipped if `audio/` is already complete)* Spawns a `tts-synthesizer` agent that runs `python -m f5_tts_mlx.generate` (via uv) sequentially, one page at a time, matching each SRT's target duration
+3. **Compose** — Creates Ken Burns videos with audio per narrated page; the zoom runs continuously across each overlay build-up and resets at the next logical slide
+4. **Merge** — User chooses merge strategy (all / by section / both); produces the final video plus an external `final.srt`
 
 ## Output Structure
 
@@ -84,7 +85,7 @@ your-slides-directory/
 ├── voice/
 │   ├── ref.wav            (your reference voice, 24kHz mono)
 │   └── ref.txt            (transcript of ref.wav)
-├── srt/
+├── srt/                   (one per narrated page; overlay-merged pages are skipped)
 │   ├── slide_01.srt
 │   ├── slide_02.srt
 │   └── ...
@@ -92,13 +93,16 @@ your-slides-directory/
 │   ├── slide_01.mp3
 │   ├── slide_02.mp3
 │   └── ...
-├── images/
-│   ├── slide_01.png
-│   ├── slide_02.png
+├── images/                (one PNG per PDF page, including overlay sub-frames)
+│   ├── slide-01.png
+│   ├── slide-02.png
 │   └── ...
 └── video/
-    ├── slide_01.mp4
+    ├── slide_01.mp4       (one segment per narrated page; numbering may have gaps)
     ├── slide_02.mp4
     ├── ...
-    └── final_all.mp4
+    ├── final_all.mp4      (or section_XX_name.mp4)
+    └── final.srt          (external subtitle for the merged video — load in VLC / IINA)
 ```
+
+> Narration files (`srt/`, `audio/`, `video/`) are keyed by **narrated** PDF page, so when overlay sub-frames are merged the `slide_NN` numbering is intentionally non-contiguous. `images/` always has one PNG per PDF page.
