@@ -9,6 +9,8 @@ This is a Claude Code plugin (`lecture-notes`) that converts PDF/TeX lecture sli
 1. `/lecture-notes <slides.pdf>` — generates an outline, then batch-produces SRT narration scripts via parallel agents
 2. `/video-from-slides <slides-directory>` — auto-runs `f5-tts-mlx` (Python, via uv) to synthesize per-slide narration (using `voice/ref.wav` + `voice/ref.txt` for voice cloning) when `audio/` is missing or incomplete, then generates per-slide videos (Ken Burns effect + audio) and merges them. Users may still pre-populate `audio/slide_XX.mp3` to skip TTS.
 
+> **Branch `try-indextts2-fp16`:** an experiment that swaps the TTS engine from f5-tts-mlx to **IndexTTS-2 MLX-Swift** (native Swift/MLX, no PyTorch), running the heavy CFM/DiT + BigVGAN stages in **fp16** with **20** diffusion steps by default (~1.3× faster than fp32/25-step, inaudible quality loss; whole-slide RTF ≈ 2.9 on M1). On this branch the `tts-synthesizer` agent drives `lecture-notes/tts/per_block_synth_indextts2.py` (stdlib-only, run via `python3`), which synthesizes each slide as **one whole-slide utterance** (binary `--text` mode, one ~4.5 GB model load per slide), auto-scales the engine's mel-token cap from the SRT length so long slides aren't truncated, and matches the SRT total duration with a pitch-preserving `atempo` stretch — **snapping to the exact target by default** (`--duration-tolerance` widens the band to keep natural takes). Mirrors the reference `index-tts2` batch notebook. Downstream video/SRT steps are unchanged. Requires the separate `indextts2-mlx` project built at `$INDEXTTS2_HOME` (default `/Users/chenlu-hung/Documents/Projects/indextts2-mlx`). No `voice/ref.txt` needed (zero-shot cloning).
+
 ## Architecture
 
 The project is structured as a **Claude Code plugin** (manifest at `lecture-notes/.claude-plugin/plugin.json`):
@@ -19,7 +21,7 @@ The project is structured as a **Claude Code plugin** (manifest at `lecture-note
 - **Agents** (`lecture-notes/agents/`): Specialized sub-agents spawned by skills
   - `script-generator` (Sonnet, cyan) — writes SRT narration for a batch of 1–5 slides
   - `script-reviewer` (Sonnet, yellow) — validates SRT format, timing, and content coverage
-  - `tts-synthesizer` (Sonnet, magenta) — runs `f5-tts-mlx` (Python via uv) per slide, matching SRT target duration
+  - `tts-synthesizer` (Sonnet, magenta) — runs IndexTTS-2 MLX-Swift per slide (see branch note above), matching SRT target duration
   - `video-composer` (Sonnet, green) — ffmpeg Ken Burns video + audio mux per slide batch
 
 ## Build Commands

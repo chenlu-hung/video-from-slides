@@ -19,10 +19,17 @@ Generate lecture videos from PDF slides with narration audio. Each slide becomes
 - Completed `/lecture-notes` pipeline (SRT files in `srt/`)
 - Either of:
   - **Audio supplied**: per-slide `audio/slide_XX.mp3` already present, OR
-  - **Reference voice for TTS**: `voice/ref.wav` (24kHz mono, 5–10s) + `voice/ref.txt`
-    (the transcript of that clip). The skill will synthesize all missing MP3s via
-    `python -m f5_tts_mlx.generate`, run inside the uv-managed project at
-    `~/.local/share/lecture-notes/tts-py/` (set up by `install.sh`).
+  - **Reference voice for TTS**: `voice/ref.wav` (5–10s of clean speech; any sample
+    rate / channels — IndexTTS-2 resamples internally and cloning is zero-shot, so
+    **no `voice/ref.txt` is required**). The skill synthesizes all missing MP3s with
+    the **IndexTTS-2 MLX-Swift** binary built in the separate `indextts2-mlx` project.
+
+> **Branch note (`try-indextts2-fp16`):** this experiment swaps the TTS engine from
+> f5-tts-mlx to IndexTTS-2 (native Swift/MLX, no PyTorch); its CFM/DiT + BigVGAN
+> stages run in fp16 with 20 diffusion steps by default. It expects the
+> `indextts2-mlx` project already built (`./build.sh Debug`) with its `models/`
+> weights converted. Set `$INDEXTTS2_HOME` if the project is not at
+> `/Users/chenlu-hung/Documents/Projects/indextts2-mlx`.
 
 ## Workflow Overview
 
@@ -53,10 +60,9 @@ Four phases:
 
    - If `missing_audio` is empty → user supplied all audio, skip Phase 2 (TTS) later.
    - If `missing_audio` is non-empty → TTS will run in Phase 2. Validate TTS prerequisites now (do **not** abort yet):
-     - `uv` is on PATH (`command -v uv`). If not, abort and tell the user to re-run `install.sh`.
-     - `~/.local/share/lecture-notes/tts-py/pyproject.toml` exists and `f5-tts-mlx` is importable in that env (`uv run --project ~/.local/share/lecture-notes/tts-py --quiet python -c 'import f5_tts_mlx'`). If not, abort and tell the user to re-run `install.sh`.
-     - `voice/ref.wav` exists and is 24kHz mono (`ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,channels -of csv=p=0 voice/ref.wav` should output `24000,1`). If missing or wrong format, abort with the exact expected filenames and format.
-     - `voice/ref.txt` exists and is non-empty.
+     - `python3` and `ffmpeg` are on PATH. The helper is stdlib-only (it orchestrates the IndexTTS-2 binary + `ffmpeg`/`ffprobe`); there is no TTS env to install.
+     - The IndexTTS-2 project is built. Resolve `INDEXTTS2_HOME` (env var, else `/Users/chenlu-hung/Documents/Projects/indextts2-mlx`) and confirm these exist: the binary `$INDEXTTS2_HOME/.build/xcode/Build/Products/Debug/indextts2`, the model dir `$INDEXTTS2_HOME/models/mlx-indextts2-standard-8bit`, and the preproc dir `$INDEXTTS2_HOME/models/preprocessing`. If any is missing, abort and tell the user to build it (`./build.sh Debug`) and convert its weights per the `indextts2-mlx` README, or to set `$INDEXTTS2_HOME`.
+     - `voice/ref.wav` exists (any sample rate / channel count is fine — IndexTTS-2 resamples internally). If missing, abort with the expected path. **`voice/ref.txt` is not needed** for IndexTTS-2.
 
 4. **Cross-reference**: At this point every SRT either has a matching MP3 or is in `missing_audio` (which will be filled in Phase 2).
 
@@ -124,7 +130,7 @@ Video Generation Settings:
   Slides:       <N> PNG images in <path>/images/
   SRT files:    <N> files in <path>/srt/
   Audio files:  <K> existing, <M> to synthesize (or "all existing" / "all to synthesize")
-  TTS engine:   f5-tts-mlx-quantized (4-bit) via uv (only if M > 0)
+  TTS engine:   IndexTTS-2 MLX-Swift  (only if M > 0)
   Reference:    voice/ref.wav  (only if M > 0)
   Output:       <path>/video/
   Resolution:   1920x1080 (4:3 slides pillarboxed in 16:9)
@@ -150,23 +156,25 @@ mkdir -p <slides-directory>/audio
 
 ### Agent Invocation
 
-Spawn **one** `tts-synthesizer` agent (do not batch — MLX uses unified memory and concurrent runs would OOM). Pass the agent:
+Spawn **one** `tts-synthesizer` agent (do not batch — MLX uses unified memory and IndexTTS-2 loads ~4.5 GB per process; concurrent runs would OOM). Pass the agent:
 
 - `<slides-directory>` — absolute path
-- `<tts-project-dir>` — `~/.local/share/lecture-notes/tts-py` (expanded to an absolute path; the uv project where `f5-tts-mlx` is installed)
+- `<helper-path>` — absolute path to `per_block_synth_indextts2.py` in the plugin's `tts/` dir (`${CLAUDE_PLUGIN_ROOT}/tts/per_block_synth_indextts2.py`)
+- `<indextts2-home>` — resolved `INDEXTTS2_HOME` (env var, else `/Users/chenlu-hung/Documents/Projects/indextts2-mlx`)
 - `<ref-wav>` — `<slides-directory>/voice/ref.wav`
-- `<ref-text>` — contents of `<slides-directory>/voice/ref.txt`, read by the skill and passed inline
 - The list of slide numbers in `missing_audio`
 
-Tell the agent: process slides sequentially, write outputs to `<slides-directory>/audio/slide_NN.mp3`, verify each MP3 duration is within ±10% of the SRT target (retry once with bumped `--speed` if too long).
+(No `<ref-text>` — IndexTTS-2 cloning is zero-shot.)
+
+Tell the agent: process slides sequentially, write outputs to `<slides-directory>/audio/slide_NN.mp3`. The helper synthesizes each slide as one utterance and tempo-matches it to the exact SRT target by default, so each MP3 should land within a fraction of a second of target; a wildly off duration (half/double) signals a failed synthesis to flag.
 
 ### Heads-up About First Run
 
-The first `python -m f5_tts_mlx.generate` invocation downloads the 4-bit MLX checkpoint (~223 MB) from Hugging Face into `~/.cache/huggingface/`. Surface a one-line notice to the user before spawning the agent so the apparent stall on slide 1 is expected.
+The first slide triggers a one-time Metal-kernel compile and loads ~4.5 GB of IndexTTS-2 weights from disk, so it stalls noticeably before audio appears; subsequent slides reuse the OS page cache and are faster. The weights are already local in the `indextts2-mlx` project (nothing is downloaded). Surface a one-line notice before spawning the agent so the apparent stall on slide 1 is expected.
 
-### Optional: Alternate Checkpoints for Better Mandarin
+### Tuning Knobs
 
-The default `alandao/f5-tts-mlx-4bit` checkpoint (4-bit quantized) covers English well and Mandarin reasonably while keeping the download ~223 MB. For better Traditional Chinese results, advanced users can edit the agent prompt to pass `--model <alternate-repo-id>` to `python -m f5_tts_mlx.generate` (the weights must be loadable by `f5-tts-mlx-quantized`). Surface this hint in the post-run summary only if the user reports Mandarin quality issues.
+IndexTTS-2 quality/speed can be nudged via helper flags the agent can pass through: `--steps N` (diffusion steps, default 20 — lower is faster), `--speed R` (speaking-rate multiplier), `--duration-tolerance F` (default 0 = snap to the exact SRT length; raise it to keep more natural takes when slightly off target). Emotion control (`--emo-ref`) is available in the binary but not wired through the helper on this branch. Surface these only if the user reports quality or pacing issues.
 
 ### After Synthesis
 
