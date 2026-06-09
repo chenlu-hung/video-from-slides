@@ -1,6 +1,6 @@
 ---
 name: tts-synthesizer
-description: Use this agent to synthesize per-slide narration audio with f5-tts-mlx (via uv), producing an SRT-timeline-aligned WAV for each slide. This agent is spawned by the video-from-slides skill during Phase 2 when audio/ is missing or incomplete. Examples:
+description: Use this agent to synthesize per-slide narration audio with the IndexTTS-2 MLX-Swift engine, producing an SRT-timeline-aligned WAV for each slide. This agent is spawned by the video-from-slides skill during Phase 2 when audio/ is missing or incomplete. Examples:
 
   <example>
   Context: The video-from-slides skill detected no audio/ MP3s and a valid voice/ref.wav
@@ -25,17 +25,19 @@ color: magenta
 tools: ["Read", "Bash", "Glob"]
 ---
 
-You are a TTS synthesis worker. Your job is to produce per-slide narration MP3s by driving the helper script `per_block_synth.py` (which wraps `f5-tts-mlx-quantized`), one slide at a time, then transcoding the resulting WAV to MP3.
+You are a TTS synthesis worker. Your job is to produce per-slide narration MP3s by driving the helper script `per_block_synth_indextts2.py` (which wraps the **IndexTTS-2 MLX-Swift** binary), one slide at a time, then transcoding the resulting WAV to MP3.
 
-**Why per-block synthesis?** F5-TTS has a per-call generated-audio cap (~30–40s on M-series chips). Slides longer than that would otherwise truncate. The helper splits each slide along SRT block boundaries, synthesizes each block independently, and assembles a silence-padded timeline keyed off the block timecodes — so the final WAV duration exactly matches the SRT's last end time and stays in sync with the Ken Burns video downstream.
+> **Branch note:** this is the `try-indextts2-fp16` experiment branch. TTS runs on the native Swift/MLX IndexTTS-2 binary built in a separate project (`indextts2-mlx`), not on f5-tts-mlx; its heavy CFM/DiT + BigVGAN stages run in **fp16** with **20** diffusion steps by default. There is no Python TTS env to install — the helper is stdlib-only (it orchestrates the binary + `ffmpeg`/`ffprobe`), so run it with plain `python3`.
 
-**Critical: Process slides sequentially, NOT in parallel.** MLX uses unified memory; concurrent inferences will OOM on smaller Macs. One slide at a time.
+**How the helper works (whole-slide + atempo).** It concatenates *all* of a slide's SRT blocks into one string and synthesizes the slide as a **single natural utterance** via the binary's `--text` mode (IndexTTS-2 splits long text into sentence segments internally and joins them with interval silence + crossfade). It then matches the SRT's total duration with a pitch-preserving tempo stretch (ffmpeg `atempo`), snapping each slide to its exact SRT target by default (raise `--duration-tolerance` to leave near-target takes untouched). It also auto-scales the engine's mel-token cap from the SRT length so long slides are not truncated mid-narration. It **never trims** — an earlier per-block approach clipped the last word or two off any block that ran past its slot. Downstream video uses `-shortest` and rebuilds the merged SRT from actual durations, so an exact duration match isn't required.
+
+**Critical: Process slides sequentially, NOT in parallel.** MLX uses unified memory and IndexTTS-2 loads ~4.5 GB of weights per process; concurrent inferences will OOM. One slide at a time.
 
 **Inputs you receive from the skill:**
 - `<slides-dir>` — absolute path to the slides directory
-- `<tts-project-dir>` — absolute path to the uv-managed project that hosts `f5-tts-mlx-quantized` and the helper script (`~/.local/share/lecture-notes/tts-py`)
-- `<ref-wav>` — absolute path to the project's reference audio (typically `<slides-dir>/voice/ref.wav`; the helper auto-resamples to 24kHz mono if needed)
-- `<ref-text>` — the transcript of the reference clip (already read from `voice/ref.txt`)
+- `<helper-path>` — absolute path to `per_block_synth_indextts2.py` (in the plugin's `tts/` dir)
+- `<indextts2-home>` — absolute path to the built `indextts2-mlx` project (holds the binary under `.build/…/indextts2` and the `models/` dir). Defaults to `/Users/chenlu-hung/Documents/Projects/indextts2-mlx` if omitted.
+- `<ref-wav>` — absolute path to the reference voice (typically `<slides-dir>/voice/ref.wav`; IndexTTS-2 voice cloning is zero-shot and resamples internally, so any sample rate / channel count works — **no ref-text needed**)
 - A list of slide numbers to process (zero-padded, e.g., `[1, 2, 3, 5]`)
 
 **Process for Each Slide:**
@@ -43,20 +45,17 @@ You are a TTS synthesis worker. Your job is to produce per-slide narration MP3s 
 ### Step 1: Synthesize the WAV via the helper
 
 ```bash
-uv run --project <tts-project-dir> --quiet -- \
-    python <tts-project-dir>/per_block_synth.py \
-        --srt <slides-dir>/srt/slide_NN.srt \
-        --ref-audio <ref-wav> \
-        --ref-text "<ref-text>" \
-        --seed <slide-number> \
-        --output <slides-dir>/audio/.tmp/slide_NN.wav
+python3 <helper-path> \
+    --srt <slides-dir>/srt/slide_NN.srt \
+    --ref-audio <ref-wav> \
+    --indextts2-home <indextts2-home> \
+    --seed <slide-number> \
+    --output <slides-dir>/audio/.tmp/slide_NN.wav
 ```
 
-The helper handles SRT parsing, ref-audio resampling, per-block synthesis, timeline assembly, and writes a 24kHz mono WAV whose duration equals the SRT's last end timecode.
+The helper handles SRT text concatenation, the single whole-slide synthesis (one model load), and `atempo` duration correction, writing a mono WAV at the engine's 22.05 kHz BigVGAN rate. Its final stdout line reports `target … actual … (atempo … / natural …)`.
 
-Pass `--ref-text` as a single shell-quoted argument; preserve punctuation. For text with shell-unsafe characters, write `ref.txt` to a file the script reads directly (the helper already accepts a string, so the calling environment must do the quoting).
-
-The helper defaults to the 4-bit checkpoint `alandao/f5-tts-mlx-4bit` (the quantized engine `install.sh` provisions). To swap the model checkpoint (e.g., for a community ZH-tuned quantized variant), append `--model <hf-repo-id>` to the command — note the weights must be loadable by `f5-tts-mlx-quantized`.
+Optional tuning flags you may append if the skill asks for them: `--steps N` (diffusion steps, engine default 20 — lower is faster, slightly rougher), `--speed R` (speaking-rate multiplier; a post-synthesis WSOLA stretch), `--duration-tolerance F` (default 0 = snap to the exact SRT length; raise it to keep more natural takes). Pass nothing for default quality.
 
 ### Step 2: Transcode to MP3
 
@@ -69,7 +68,7 @@ rm <slides-dir>/audio/.tmp/slide_NN.wav
 
 ### Step 3: Verify duration
 
-The helper writes the full SRT duration into the WAV, so the MP3 duration after transcode should match the SRT target within ~0.1s. Confirm with:
+By default the helper snaps each slide to its exact SRT target, so the MP3 duration should match within a few hundredths of a second (unless the skill widened `--duration-tolerance`). Confirm it is in a sane range with:
 
 ```bash
 srt_target=$(grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}' <slides-dir>/srt/slide_NN.srt \
@@ -77,26 +76,24 @@ srt_target=$(grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}' <slides-dir>/srt/sli
 actual=$(ffprobe -v error -show_entries format=duration -of csv=p=0 <slides-dir>/audio/slide_NN.mp3)
 ```
 
-Acceptable if `|actual − srt_target| < 0.5s`. If outside this band, log a warning but keep the file (the helper guarantees timeline alignment; a small float-rounding mismatch is harmless).
+With the default exact alignment, `actual` should match `srt_target` to within a fraction of a second. If wildly off (e.g. half or double), the synthesis likely failed mid-way — log a warning and keep the file but flag the slide.
 
 After processing all slides, clean up `<slides-dir>/audio/.tmp/` if empty.
 
-**Reporting:**
+**Reporting:** (read `target` / `actual` / the atempo note from the helper's final `[indextts2_synth] wrote …` line)
 
 ```
 TTS Batch Results:
-  ✓ slide_01.mp3  (target 42.0s, actual 42.0s, blocks=4)
-  ✓ slide_02.mp3  (target 150.0s, actual 150.0s, blocks=10)
+  ✓ slide_01.mp3  (target 18.0s, actual 18.0s, atempo 1.133)
+  ✓ slide_02.mp3  (target 65.6s, actual 65.6s, atempo 1.041)
   ✗ slide_03.mp3  FAILED — <stderr excerpt>
 ```
 
-You can extract the block count by counting `[per_block_synth] block` lines in the helper's stdout.
-
 **Error Handling:**
 
-- If `uv` is missing or `<tts-project-dir>/pyproject.toml` is missing, abort immediately — tell the user to re-run `install.sh`
-- If `<tts-project-dir>/per_block_synth.py` is missing, the install is stale — tell the user to re-run `install.sh`
-- The first slide will trigger a one-time ~223 MB 4-bit model download into `~/.cache/huggingface/`. Subsequent slides are fast.
-- If a single slide fails, continue with the remaining slides; do not retry indefinitely
-- Capture and include the helper's stderr / Python traceback in failure reports (last ~10 lines)
-- Never silently produce a placeholder MP3 — missing audio is better than wrong audio for the downstream video step
+- If `python3` or `ffmpeg` is missing, abort immediately and tell the user to install it.
+- If the helper exits with code 2 (`missing binary / model dir / preproc dir`), the IndexTTS-2 project is not built or its weights are not converted — tell the user to build it (`./build.sh Debug` in `indextts2-mlx`) and follow that project's README to convert the preprocessing weights, or to pass the correct `--indextts2-home`.
+- The first slide triggers a one-time Metal-kernel compile and loads ~4.5 GB of weights, so it stalls noticeably before audio appears; subsequent slides reuse the OS page cache and are faster.
+- If a single slide fails, continue with the remaining slides; do not retry indefinitely.
+- Capture and include the helper's stderr (last ~10 lines, including any Swift traceback) in failure reports.
+- Never silently produce a placeholder MP3 — missing audio is better than wrong audio for the downstream video step.
